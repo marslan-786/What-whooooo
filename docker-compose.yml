@@ -1,0 +1,90 @@
+version: '3.8'
+
+services:
+  # 1. ڈیٹا بیس (Postgres)
+  postgres:
+    image: postgres:15
+    restart: always
+    environment:
+      POSTGRES_DB: chatwoot
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: password123
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # 2. میموری/کیش (Redis)
+  redis:
+    image: redis:alpine
+    restart: always
+    command: ["sh", "-c", "redis-server --requirepass $REDIS_PASSWORD"]
+    environment:
+      REDIS_PASSWORD: password123
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "password123", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # 3. مین ویب سرور (یہاں آٹومیشن لگی ہے)
+  web:
+    image: chatwoot/chatwoot:latest
+    restart: always
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    ports:
+      - "3000:3000"
+    environment:
+      NODE_ENV: production
+      RAILS_ENV: production
+      INSTALLATION_ENV: docker
+      DATABASE_URL: postgres://postgres:password123@postgres:5432/chatwoot
+      REDIS_URL: redis://:password123@redis:6379
+      ACTIVE_STORAGE_SERVICE: local
+      RAILS_LOG_TO_STDOUT: true
+      SECRET_KEY_BASE: change_this_to_something_very_long_and_random
+      FRONTEND_URL: "http://localhost:3000" # جب ریلوے ڈومین دے تو یہاں اپڈیٹ کریں
+    volumes:
+      - chatwoot_storage:/app/storage
+    # 👇 سب سے اہم حصہ: یہ کمانڈ خود سب کچھ کرے گی 👇
+    # یہ کہتا ہے: "پہلے DB تیار کرو، اگر ایرر آئے (مطلب پہلے سے بنا ہے) تو اسے اگنور کرو اور سرور سٹارٹ کر دو"
+    command: >
+      sh -c "bundle exec rails db:chatwoot_prepare; 
+             bundle exec rails s -p 3000 -b 0.0.0.0"
+
+  # 4. بیک گراؤنڈ ورکر
+  worker:
+    image: chatwoot/chatwoot:latest
+    restart: always
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      RAILS_ENV: production
+      INSTALLATION_ENV: docker
+      DATABASE_URL: postgres://postgres:password123@postgres:5432/chatwoot
+      REDIS_URL: redis://:password123@redis:6379
+      ACTIVE_STORAGE_SERVICE: local
+      SECRET_KEY_BASE: change_this_to_something_very_long_and_random
+      FRONTEND_URL: "http://localhost:3000"
+    volumes:
+      - chatwoot_storage:/app/storage
+    command: bundle exec sidekiq -C config/sidekiq.yml
+
+# والیمز کی تعریف (ڈیٹا محفوظ رکھنے کے لیے)
+volumes:
+  postgres_data:
+  redis_data:
+  chatwoot_storage:
